@@ -1,4 +1,5 @@
-This repository contains the code and dataset for our research:
+## Codes and data for the research:
+
 📝 Exploiting small-scale neural network models for dynamic response prediction problems
 
 ## ⚙️ Requirements
