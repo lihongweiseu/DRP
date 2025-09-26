@@ -1,0 +1,100 @@
+# %%
+import matplotlib.pyplot as plt
+import torch
+from torch import nn
+import time
+import numpy as np
+from scipy.io import savemat, loadmat
+import os, sys
+import glob
+current_path = os.path.dirname(__file__)
+parent_path = os.path.dirname(current_path)
+os.chdir(parent_path)
+sys.path.append('.')
+from DSNN_tools import DSNN_create, DSNN_cal, DSNN_training
+from general_tools import time_str
+os.chdir(current_path)
+sys.path.append('.')
+device = torch.device('cpu') # 'cuda:0' 'cpu'
+
+name='MR'
+# Prepare data
+dt=0.005
+Nt1=2001
+Nt2=3499
+f = loadmat(name+'_data.mat')
+u = f['u'].reshape([Nt2, 1, 1])
+y_ref = f['y_ref'].reshape([Nt2, 1, 1])
+tend = (Nt2 - 1) * dt
+t = np.linspace(0, tend, Nt2).reshape(-1, 1)
+del f, dt, tend
+bias_status=False
+
+# Define the configuration of DSNN
+in_s = 1
+out_s = 1
+state_non_layer_s=1
+out_non_layer_s=1
+state_non_neuron = np.zeros(state_non_layer_s, dtype=np.int32)  # size of each nonlinear layer
+out_non_neuron = np.zeros(out_non_layer_s, dtype=np.int32)  # size of each nonlinear layer
+out_non_neuron[0] = out_s  # user defined
+# %%
+N = 20000 # training num 20000
+All_start = time.time()
+for i in range(1,21,1):
+    state_s=i
+    state_non_neuron[0] = state_s  # user defined
+    DSNN_model = DSNN_create(in_s, state_s, out_s, state_non_layer_s, out_non_layer_s, state_non_neuron, out_non_neuron, device, bias_status)
+    # total_num = sum(p.numel() for p in DSNN_model.parameters())
+    trainable_num = sum(p.numel() for p in DSNN_model.parameters() if p.requires_grad)
+
+    best_params, loss_all, loss_m, cost_time, im, cost_time_str = DSNN_training(1, Nt1, u[0:Nt1,:,:], DSNN_model, N, y_ref[0:Nt1,:,:], state_s, out_s, device)
+    torch.save(best_params, './saved_models/'+name+'_DSNN_'+str(state_s)+'_'+'{:.4e}'.format(loss_m).replace('e+0', 'e').replace('e-0', 'e-')+'_'+str(im)+'_'+cost_time_str+'.pt')
+    savemat('./saved_data/'+name+'_DSNN_'+str(state_s)+'_'+'{:.4e}'.format(loss_m).replace('e+0', 'e').replace('e-0', 'e-')+'_'+str(im)+'_'+cost_time_str+'.mat', {'loss_all': loss_all,
+     'cost_time': cost_time, 'trainable_num': trainable_num})
+
+All_end = time.time()
+All_cost_time = All_end - All_start
+All_cost_time_str = time_str(All_cost_time)
+print('Total training time for all cases: ' + All_cost_time_str)
+# %%
+state_s=19
+state_non_neuron[0] = state_s  # user defined
+DSNN_model = DSNN_create(in_s, state_s, out_s, state_non_layer_s, out_non_layer_s, state_non_neuron, out_non_neuron, 'cpu', bias_status)
+trainable_num = sum(p.numel() for p in DSNN_model.parameters() if p.requires_grad)
+pt_match = glob.glob(os.path.join('./saved_models', '*_DSNN_'+str(state_s)+'_*.pt'))
+DSNN_model.load_state_dict(torch.load(pt_match[0], map_location='cpu'))
+u_torch = torch.tensor(u)
+start = time.time()
+y_pre_torch = DSNN_cal(1, Nt2, u, DSNN_model, state_s, out_s, 'cpu')
+end = time.time()
+inference_time = end - start 
+y_pre = y_pre_torch.reshape([Nt2, 1]).detach().numpy()
+from sklearn.metrics import r2_score
+R2_train= r2_score(y_ref.reshape([Nt2, 1])[0:Nt1, 0], y_pre[0:Nt1, 0])
+R2_test= r2_score(y_ref.reshape([Nt2, 1])[Nt1:Nt2, 0], y_pre[Nt1:Nt2, 0])
+# R2_train, R2_test, trainning time, inference_time, parameter number
+# 0.9982238764315926, 0.9893094515018981, 2h8m24s, 0.29302453994750977s, 1162
+
+plt.plot(t, y_ref.reshape([Nt2, 1]))
+plt.plot(t, y_pre)
+plt.show()
+# %%
+y_ref_torch = torch.tensor(y_ref)
+criterion = nn.MSELoss()
+loss_DSNN=np.zeros((20, 2))
+for i in range(1,21):
+    mat_match = glob.glob(os.path.join('./saved_data', '*_DSNN_'+str(i)+'_*.mat'))
+    f = loadmat(mat_match[0])
+    loss_all=f['loss_all']
+    loss_DSNN[i-1:i, :1]=np.min(loss_all)
+    pt_match=mat_match[0].replace('data', 'models').replace('mat', 'pt')
+    state_s=i
+    state_non_neuron[0] = state_s  # user defined
+    DSNN_model = DSNN_create(in_s, state_s, out_s, state_non_layer_s, out_non_layer_s, state_non_neuron, out_non_neuron, device, bias_status)
+    DSNN_model.load_state_dict(torch.load(pt_match, map_location='cpu'))
+    y_pre_torch = DSNN_cal(1, Nt2, u, DSNN_model, state_s, out_s, 'cpu')
+    loss_DSNN[i-1:i, 1:2] = criterion(y_pre_torch[Nt1:Nt2,:,:], y_ref_torch[Nt1:Nt2,:,:]).item()
+
+del mat_match, pt_match, f, loss_all
+savemat(name+'_loss_DSNN.mat', {name+'_loss_DSNN': loss_DSNN})
