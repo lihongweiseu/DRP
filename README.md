@@ -9,7 +9,6 @@
 ## 🗂️ Project Structure
 
 ```text
-.
 ├── 1. Bouc-Wen/                       # Case 1
 │   ├── BW_RNN.py ~ BW_TCN.py          # Main training scripts for five neural networks
 │   ├── BW_data.mat                    # Training and testing datasets
